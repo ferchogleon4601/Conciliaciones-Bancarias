@@ -13,6 +13,7 @@ import { AIAuditOpinion } from "./components/AIAuditOpinion";
 import { EmailNotificationModal } from "./components/EmailNotificationModal";
 import { ParametersModal } from "./components/ParametersModal";
 import { AuditReportPrintView } from "./components/AuditReportPrintView";
+import { VercelDeployModal } from "./components/VercelDeployModal";
 import {
   DEFAULT_PARAMETERS,
   SAMPLE_LEDGER_DATA,
@@ -24,6 +25,7 @@ import {
   ReconciliationParameters,
   ReconciliationResult,
 } from "./types";
+import { reconcileTransactions } from "./utils/reconcileEngine";
 import {
   CheckCircle2,
   AlertCircle,
@@ -47,6 +49,7 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
   const [isPrintReportOpen, setIsPrintReportOpen] = useState(false);
+  const [isVercelModalOpen, setIsVercelModalOpen] = useState(false);
 
   // Show toast notification
   const showToast = (text: string, type: "success" | "error" = "success") => {
@@ -56,7 +59,7 @@ export default function App() {
     }, 4500);
   };
 
-  // Execute reconciliation via backend Python Engine
+  // Execute reconciliation via backend Python Engine with automatic Vercel/TS fallback
   const executeReconciliation = async (
     customLedger?: LedgerTransaction[],
     customBank?: BankTransaction[],
@@ -73,22 +76,41 @@ export default function App() {
 
     setIsProcessing(true);
     try {
-      const response = await fetch("/api/reconcile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ledgerTransactions: lData,
-          bankTransactions: bData,
-          parameters: pData,
-        }),
-      });
+      let result: ReconciliationResult;
 
-      if (!response.ok) {
-        const errJson = await response.json().catch(() => ({}));
-        throw new Error(errJson.details || errJson.error || "Error al procesar conciliación con Python.");
+      try {
+        const response = await fetch("/api/reconcile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ledger_transactions: lData,
+            bank_transactions: bData,
+            ledgerTransactions: lData,
+            bankTransactions: bData,
+            parameters: pData,
+          }),
+        });
+
+        if (response.ok) {
+          result = await response.json();
+        } else {
+          // Fallback to client TypeScript engine if backend is not available
+          console.warn("Backend response not ok, running local TypeScript core...");
+          result = reconcileTransactions({
+            ledger_transactions: lData,
+            bank_transactions: bData,
+            parameters: pData,
+          });
+        }
+      } catch (networkErr) {
+        console.warn("Network request failed, running local TypeScript core fallback:", networkErr);
+        result = reconcileTransactions({
+          ledger_transactions: lData,
+          bank_transactions: bData,
+          parameters: pData,
+        });
       }
 
-      const result: ReconciliationResult = await response.json();
       setReconciliationResult(result);
       showToast(
         `Conciliación completada: ${result.summary.matched_count} partidas cruzadas, ${result.summary.discrepancies_count} discrepancias.`,
@@ -96,7 +118,7 @@ export default function App() {
       );
     } catch (err: any) {
       console.error(err);
-      showToast(err.message || "Error al conectar con el motor Python.", "error");
+      showToast(err.message || "Error al procesar la conciliación bancaria.", "error");
     } finally {
       setIsProcessing(false);
     }
@@ -151,6 +173,7 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenEmail={() => setIsEmailModalOpen(true)}
         onPrintReport={() => setIsPrintReportOpen(true)}
+        onOpenVercel={() => setIsVercelModalOpen(true)}
         onLoadSample={handleLoadSample}
         onReset={handleReset}
         reconciliationResult={reconciliationResult}
@@ -242,6 +265,12 @@ export default function App() {
           parameters={parameters}
         />
       )}
+
+      {/* Vercel Deployment Modal */}
+      <VercelDeployModal
+        isOpen={isVercelModalOpen}
+        onClose={() => setIsVercelModalOpen(false)}
+      />
     </div>
   );
 }

@@ -19,6 +19,7 @@ interface HeaderProps {
   onPrintReport: () => void;
   onLoadSample: () => void;
   onReset: () => void;
+  onOpenVercel?: () => void;
   reconciliationResult: ReconciliationResult | null;
   isProcessing: boolean;
 }
@@ -30,6 +31,7 @@ export const Header: React.FC<HeaderProps> = ({
   onPrintReport,
   onLoadSample,
   onReset,
+  onOpenVercel,
   reconciliationResult,
   isProcessing,
 }) => {
@@ -48,7 +50,7 @@ export const Header: React.FC<HeaderProps> = ({
               </h1>
               <span className="hidden sm:inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-500/30">
                 <Cpu className="w-3 h-3" />
-                Motor Python 3.10
+                Motor Dual (Python + TS Vercel)
               </span>
             </div>
             <p className="text-xs text-slate-400">
@@ -69,6 +71,21 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Action Controls */}
         <div className="flex items-center flex-wrap gap-2">
+          {/* Vercel Deploy Guide Button */}
+          {onOpenVercel && (
+            <button
+              id="btn-open-vercel-guide"
+              onClick={onOpenVercel}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-black hover:bg-slate-800 text-white transition-all shadow-sm border border-slate-700 active:scale-95"
+              title="Guía y configuración de despliegue a Vercel"
+            >
+              <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 76 65">
+                <path d="M37.5274 0L75.0548 65H0L37.5274 0Z" />
+              </svg>
+              <span>Subir a Vercel</span>
+            </button>
+          )}
+
           {/* Load Demo Case */}
           <button
             id="btn-load-sample"

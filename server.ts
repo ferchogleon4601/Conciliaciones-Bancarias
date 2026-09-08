@@ -2,9 +2,9 @@ import express from "express";
 import path from "path";
 import { spawn } from "child_process";
 import fs from "fs";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import nodemailer from "nodemailer";
+import { reconcileTransactions } from "./src/utils/reconcileEngine";
 
 const app = express();
 const PORT = 3000;
@@ -26,54 +26,99 @@ function getGeminiClient(): GoogleGenAI | null {
   });
 }
 
-// Health check
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", python: true, time: new Date().toISOString() });
+// Health check endpoint (supports both /api/health and /health)
+app.get(["/api/health", "/health"], (_req, res) => {
+  res.json({
+    status: "ok",
+    app: "ConciliaData PRO",
+    pythonEngine: !process.env.VERCEL,
+    tsEngine: true,
+    vercel: !!process.env.VERCEL,
+    time: new Date().toISOString(),
+  });
 });
 
-// Execute Python Reconciliation Engine
-app.post("/api/reconcile", async (req, res) => {
+// Execute Reconciliation Engine (Python with automatic TypeScript Vercel fallback)
+app.post(["/api/reconcile", "/reconcile"], async (req, res) => {
   try {
-    const payload = req.body;
-    if (!payload || !payload.ledger_transactions || !payload.bank_transactions) {
+    const rawPayload = req.body || {};
+    const ledger = rawPayload.ledger_transactions || rawPayload.ledgerTransactions;
+    const bank = rawPayload.bank_transactions || rawPayload.bankTransactions;
+
+    if (!ledger || !bank || !Array.isArray(ledger) || !Array.isArray(bank)) {
       return res.status(400).json({ error: "Faltan datos de transacciones de libros o banco." });
     }
 
-    const pythonProcess = spawn("python3", ["reconcile_engine.py"]);
-    let stdoutData = "";
-    let stderrData = "";
+    const payload = {
+      ledger_transactions: ledger,
+      bank_transactions: bank,
+      parameters: rawPayload.parameters || {},
+    };
 
-    pythonProcess.stdin.write(JSON.stringify(payload));
-    pythonProcess.stdin.end();
+    // If running in Vercel Serverless environment, use high-speed TypeScript engine directly
+    if (process.env.VERCEL === "1") {
+      const result = reconcileTransactions(payload);
+      return res.json(result);
+    }
 
-    pythonProcess.stdout.on("data", (data) => {
-      stdoutData += data.toString();
-    });
+    // Try executing Python reconciliation engine with instant fallback if python3 is unavailable
+    let hasResponded = false;
 
-    pythonProcess.stderr.on("data", (data) => {
-      stderrData += data.toString();
-    });
-
-    pythonProcess.on("close", (code) => {
-      if (code !== 0) {
-        console.error("Python engine error exit code", code, stderrData);
-        return res.status(500).json({
-          error: "Error ejecutando el motor de conciliación en Python",
-          details: stderrData || "Código de salida distinto de 0",
-        });
-      }
-
+    const runFallback = () => {
+      if (hasResponded) return;
+      hasResponded = true;
       try {
-        const parsed = JSON.parse(stdoutData);
-        return res.json(parsed);
-      } catch (parseErr) {
-        console.error("Failed to parse Python output JSON:", parseErr, stdoutData);
+        const result = reconcileTransactions(payload);
+        return res.json(result);
+      } catch (tsErr: any) {
         return res.status(500).json({
-          error: "Error decodificando la respuesta JSON del motor Python",
-          raw: stdoutData.slice(0, 500),
+          error: "Error en motor de conciliación TypeScript",
+          details: tsErr.message,
         });
       }
-    });
+    };
+
+    try {
+      const pythonProcess = spawn("python3", ["reconcile_engine.py"]);
+      let stdoutData = "";
+      let stderrData = "";
+
+      pythonProcess.on("error", (spawnErr) => {
+        console.warn("Python execution not available, activating TypeScript Core fallback:", spawnErr.message);
+        runFallback();
+      });
+
+      pythonProcess.stdin.write(JSON.stringify(payload));
+      pythonProcess.stdin.end();
+
+      pythonProcess.stdout.on("data", (data) => {
+        stdoutData += data.toString();
+      });
+
+      pythonProcess.stderr.on("data", (data) => {
+        stderrData += data.toString();
+      });
+
+      pythonProcess.on("close", (code) => {
+        if (hasResponded) return;
+
+        if (code !== 0) {
+          console.warn("Python engine exited with code", code, "falling back to TypeScript Core...");
+          return runFallback();
+        }
+
+        try {
+          const parsed = JSON.parse(stdoutData);
+          hasResponded = true;
+          return res.json(parsed);
+        } catch {
+          console.warn("Python stdout JSON parse failed, falling back to TypeScript Core...");
+          return runFallback();
+        }
+      });
+    } catch {
+      runFallback();
+    }
   } catch (err: any) {
     console.error("Error in /api/reconcile:", err);
     res.status(500).json({ error: err.message || "Error interno del servidor" });
@@ -81,7 +126,7 @@ app.post("/api/reconcile", async (req, res) => {
 });
 
 // PDF Bank Statement Parsing Endpoint
-app.post("/api/parse-pdf", async (req, res) => {
+app.post(["/api/parse-pdf", "/parse-pdf"], async (req, res) => {
   try {
     const { base64Data } = req.body;
     if (!base64Data) {
@@ -188,7 +233,7 @@ app.post("/api/parse-pdf", async (req, res) => {
 });
 
 // Senior Data Analyst AI Audit Opinion via Gemini
-app.post("/api/ai-audit-analysis", async (req, res) => {
+app.post(["/api/ai-audit-analysis", "/ai-audit-analysis"], async (req, res) => {
   try {
     const ai = getGeminiClient();
     if (!ai) {
@@ -258,7 +303,7 @@ Responde ÚNICAMENTE con el objeto JSON válido.
 });
 
 // Email Notification Dispatcher
-app.post("/api/send-email", async (req, res) => {
+app.post(["/api/send-email", "/send-email"], async (req, res) => {
   try {
     const { recipient, subject, summary, discrepancies, reportHtml } = req.body;
     const toEmail = recipient || process.env.SMTP_USER || "auditor@empresa.com";
@@ -360,6 +405,7 @@ app.post("/api/send-email", async (req, res) => {
 async function startServer() {
   // Vite middleware in dev or static files in production
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -378,4 +424,10 @@ async function startServer() {
   });
 }
 
-startServer();
+// Only start standalone HTTP server when not running in Vercel Serverless environment
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export { app };
+export default app;
