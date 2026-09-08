@@ -1,0 +1,6 @@
+{
+  "name": "ConciliaData - Conciliación Bancaria & Auditoría",
+  "description": "Sistema automatizado de conciliación bancaria con motor Python para cruce de libros auxiliares en Excel y extractos PDF/CSV, análisis de discrepancias, gráficos comparativos y notificaciones por correo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
